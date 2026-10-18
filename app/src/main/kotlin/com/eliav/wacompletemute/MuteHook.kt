@@ -136,7 +136,10 @@ class MuteHook : IXposedHookLoadPackage {
     /** Extract a normalised group JID from an arbitrary string that may have suffixes. */
     private fun extractJid(s: String): String? = JID_RE.find(s)?.value
 
-    private fun log(msg: String) = XposedBridge.log("$TAG: $msg")
+    private fun log(msg: String) {
+        android.util.Log.d(TAG, msg)  // Android logcat
+        XposedBridge.log("$TAG: $msg")  // Xposed log
+    }
 
     private fun idOf(ctx: Context, name: String, fb: Int): Int =
         idCache.getOrPut(name) {
@@ -181,16 +184,32 @@ class MuteHook : IXposedHookLoadPackage {
     // ── Entry point ───────────────────────────────────────────────────────
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        if (lpparam.packageName != WHATSAPP_PACKAGE) return
+        log("handleLoadPackage: pkg=${lpparam.packageName} process=${lpparam.processName}")
+        if (lpparam.packageName != WHATSAPP_PACKAGE) {
+            log("handleLoadPackage: not WhatsApp, skipping")
+            return
+        }
+        log("handleLoadPackage: WhatsApp detected, installing hooks")
         try {
             hookViewSetTag(lpparam.classLoader)
+            log("handleLoadPackage: hookViewSetTag OK")
             hookPopupWindow(lpparam.classLoader)
+            log("handleLoadPackage: hookPopupWindow OK")
             hookNotificationManager(lpparam.classLoader)
+            log("handleLoadPackage: hookNotificationManager OK")
             hookMenuController(lpparam.classLoader)
+            log("handleLoadPackage: hookMenuController OK")
             hookNativeItemGuard(lpparam.classLoader)
+            log("handleLoadPackage: hookNativeItemGuard OK")
             hookMuteDialog(lpparam.classLoader)
+            log("handleLoadPackage: hookMuteDialog OK")
             loadMutedGroups(lpparam.classLoader)
-        } catch (e: Throwable) { log("setup error: ${e.message}") }
+            log("handleLoadPackage: loadMutedGroups OK")
+            log("handleLoadPackage: ALL HOOKS INSTALLED SUCCESSFULLY")
+        } catch (e: Throwable) {
+            log("setup error: ${e.javaClass.name}: ${e.message}")
+            e.printStackTrace()
+        }
     }
 
     // ── Hook 1: View.setTag — bell updates ───────────────────────────────
