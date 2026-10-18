@@ -197,6 +197,8 @@ class MuteHook : IXposedHookLoadPackage {
             log("handleLoadPackage: hookPopupWindow OK")
             hookNotificationManager(lpparam.classLoader)
             log("handleLoadPackage: hookNotificationManager OK")
+            hookStartActivity(lpparam.classLoader)
+            log("handleLoadPackage: hookStartActivity OK")
             hookMenuController(lpparam.classLoader)
             log("handleLoadPackage: hookMenuController OK")
             hookNativeItemGuard(lpparam.classLoader)
@@ -859,7 +861,37 @@ class MuteHook : IXposedHookLoadPackage {
         if (v is ViewGroup) for (i in 0 until v.childCount) collectButtons(v.getChildAt(i), out)
     }
 
-    // ── Hook 4: NotificationManager.notify ───────────────────────────────
+    // ── Hook 5: Block call activities ────────────────────────────────────
+
+    private fun hookStartActivity(cl: ClassLoader) {
+        val hook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                try {
+                    val intent = param.args.getOrNull(0) as? android.content.Intent ?: return
+                    val component = intent.component ?: return
+                    val className = component.className
+                    
+                    // Block VoipActivityV2 (incoming call screen) for muted groups
+                    if (className.contains("VoipActivityV2") || className.contains("CallActivity")) {
+                        val jidString = intent.getStringExtra("jid") ?: return
+                        val jid = extractJid(jidString) ?: return
+                        
+                        ensureMutedLoaded(null)
+                        if (jid in mutedGroupsInProcess) {
+                            param.result = null
+                        }
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+        
+        XposedHelpers.findAndHookMethod("android.app.Activity", cl, "startActivity",
+            android.content.Intent::class.java, hook)
+        XposedHelpers.findAndHookMethod("android.content.Context", cl, "startActivity",
+            android.content.Intent::class.java, hook)
+    }
+
+    // ── Hook 6: NotificationManager.notify ───────────────────────────────
 
     private fun hookNotificationManager(@Suppress("UNUSED_PARAMETER") cl: ClassLoader) {
         val hook = object : XC_MethodHook() {
@@ -878,6 +910,7 @@ class MuteHook : IXposedHookLoadPackage {
                     val ctx = currentApp() ?: return
                     val jid = getJidFromRowId(ctx, lastRowId)
                     
+                    // Block if muted group (handles messages, calls, and any notification with JID)
                     if (jid != null && jid in mutedGroupsInProcess) {
                         param.result = null
                     }
