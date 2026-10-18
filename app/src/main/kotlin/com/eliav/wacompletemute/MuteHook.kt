@@ -869,60 +869,37 @@ class MuteHook : IXposedHookLoadPackage {
                     val extras = n.extras ?: return
                     
                     val isGroupChat = extras.getBoolean("android.isGroupConversation", false)
-                    if (!isGroupChat) return  // Skip non-group notifications
+                    if (!isGroupChat) return
                     
                     ensureMutedLoaded(null)
-                    if (mutedGroupsInProcess.isEmpty()) return  // No muted groups
+                    if (mutedGroupsInProcess.isEmpty()) return
                     
-                    // Try to extract JID from notification content
-                    var jid: String? = null
-                    
-                    // Check all extras values
-                    run extraction@ {
-                        for (key in extras.keySet()) {
-                            val v = extras.get(key)
-                            
-                            // Check strings
-                            if (v is String && v.contains("@g.us")) {
-                                extractJid(v)?.let { jid = it; return@extraction }
-                            }
-                            
-                            // Check MessagingStyle messages
-                            if (v is Array<*> && key == "android.messages") {
-                                for (msg in v) {
-                                    if (msg is android.os.Bundle) {
-                                        val sender = msg.getCharSequence("sender_person")?.toString()
-                                        if (sender?.contains("@g.us") == true) {
-                                            // Extract group JID from sender (format: "Name\n<user_jid>\n<group_jid>")
-                                            val parts = sender.split("\n")
-                                            if (parts.size >= 3) {
-                                                extractJid(parts[2])?.let { jid = it; return@extraction }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            // Check Person list
-                            if (v is java.util.ArrayList<*> && key == "android.people.list") {
-                                for (person in v) {
-                                    val uri = try {
-                                        person?.javaClass?.getMethod("getUri")?.invoke(person) as? android.net.Uri
-                                    } catch (_: Throwable) { null }
-                                    uri?.toString()?.let { uriStr ->
-                                        if (uriStr.contains("@g.us")) {
-                                            extractJid(uriStr)?.let { jid = it; return@extraction }
-                                        }
-                                    }
-                                }
+                    // Try to get JID from database using last_row_id
+                    val lastRowId = extras.getLong("last_row_id", -1L)
+                    if (lastRowId > 0) {
+                        val ctx = currentApp()
+                        if (ctx != null) {
+                            val jid = getJidFromRowId(ctx, lastRowId)
+                            if (jid != null && jid in mutedGroupsInProcess) {
+                                param.result = null
+                                return
                             }
                         }
                     }
                     
-                    if (jid == null) return
+                    // Fallback: scan extras for JID
+                    var jid: String? = null
+                    run extraction@ {
+                        for (key in extras.keySet()) {
+                            val v = extras.get(key)
+                            if (v is String && v.contains("@g.us")) {
+                                extractJid(v)?.let { jid = it; return@extraction }
+                            }
+                        }
+                    }
                     
-                    if (jid in mutedGroupsInProcess) {
-                        param.result = null  // Block notification
+                    if (jid != null && jid in mutedGroupsInProcess) {
+                        param.result = null
                     }
                 } catch (_: Throwable) {}
             }
@@ -932,6 +909,43 @@ class MuteHook : IXposedHookLoadPackage {
             "notify", String::class.java, Int::class.java, Notification::class.java, hook)
         XposedHelpers.findAndHookMethod(NotificationManager::class.java,
             "notify", Int::class.java, Notification::class.java, hook)
+    }
+    
+    private fun getJidFromRowId(ctx: Context, rowId: Long): String? {
+        return try {
+            val dbPath = ctx.getDatabasePath("msgstore.db")
+            if (!dbPath.exists()) return null
+            
+            val db = android.database.sqlite.SQLiteDatabase.openDatabase(
+                dbPath.absolutePath, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+            )
+            
+            try {
+                // Query: message._id -> message.chat_row_id -> chat.jid_row_id -> jid.raw_string
+                val cursor = db.rawQuery(
+                    """
+                    SELECT j.raw_string 
+                    FROM message m
+                    JOIN chat c ON m.chat_row_id = c._id
+                    JOIN jid j ON c.jid_row_id = j._id
+                    WHERE m._id = ?
+                    """.trimIndent(),
+                    arrayOf(rowId.toString())
+                )
+                
+                val jidStr = if (cursor.moveToFirst()) {
+                    cursor.getString(0)
+                } else null
+                
+                cursor.close()
+                jidStr?.let { extractJid(it) }
+            } finally {
+                db.close()
+            }
+        } catch (e: Throwable) {
+            log("getJidFromRowId error: ${e.message}")
+            null
+        }
     }
 
     private fun extractJidFromNotification(n: Notification): String? {
