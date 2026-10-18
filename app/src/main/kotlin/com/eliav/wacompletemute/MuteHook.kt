@@ -283,8 +283,11 @@ class MuteHook : IXposedHookLoadPackage {
     }
 
     // ── Hook 2: PopupWindow ──────────────────────────────────────────────
-    // מטרה: לתפוס תפריט של קבוצה ספציפית ולהוסיף "השתק לגמרי".
-    // ה-JID נקבע לפי מסך השיחה (extras של ה-Activity) ורק אם אין — לפי שורת הצ'אט האחרונה.
+    // ה-JID נקבע בנקודת הלחיצה עצמה — ממסך השיחה הפתוח, מהשורה שנלחצה, או מ-lastChatRowJid
+    // כ-fallback אחרון. ה-JID מנורמל ומועבר לאורך כל הפעולה.
+
+    // מיפוי popup → JID שנסגר בנקודת ה-show (לפני postDelayed) — מונע דריסה בגלילה
+    private val popupJid = WeakHashMap<PopupWindow, String>()
 
     private fun hookPopupWindow(classLoader: ClassLoader) {
         val hook = object : XC_MethodHook() {
@@ -292,9 +295,11 @@ class MuteHook : IXposedHookLoadPackage {
                 val popup = param.thisObject as? PopupWindow ?: return
                 val contentView = popup.contentView ?: return
 
-                val jid = resolveJid(contentView.context) ?: return
+                val jid = resolveJid(contentView.context, param.args[0] as? View) ?: return
                 if (!jid.contains("@g.us")) return
 
+                // נועל את ה-JID לאובייקט ה-popup עצמו — לא גלובלי
+                popupJid[popup] = jid
                 ensureMutedLoaded(contentView.context)
                 handlePopupShown(popup, contentView, jid)
             }
@@ -318,29 +323,52 @@ class MuteHook : IXposedHookLoadPackage {
     }
 
     /**
-     * JID של הקבוצה שהתפריט שייך לה. lastChatRowJid הוא משתנה גלובלי שנדרס בכל bind של שורה
-     * (גם של קבוצות אחרות) ולכן אינו אמין; במסך שיחה ה-JID נמצא ב-extras של ה-Activity.
+     * JID של הקבוצה שהתפריט שייך לה, נקבע בנקודת הלחיצה:
+     * 1. אם ב-anchorView (ה-View שהתפריט עוגן עליו) או אחד מהוריו יש tag עם JID — עדיפות ראשונה.
+     * 2. Activity intent extras — אמין במסך שיחה פתוח.
+     * 3. lastChatRowJid — fallback אחרון בלבד (רשימת הצ'אטים).
      */
-    private fun resolveJid(context: Context): String? {
+    private fun resolveJid(context: Context, anchorView: View?): String? {
+        // 1. JID מה-View שנלחץ (הכי ספציפי)
+        if (anchorView != null) {
+            var v: View? = anchorView
+            var depth = 0
+            while (v != null && depth < 8) {
+                val t = v.tag as? String
+                if (t != null && t.contains("@g.us") &&
+                    !t.contains("Key") && !t.contains("isFromMe") && !t.contains("id=")) {
+                    extractGroupJid(t)?.let { return it }
+                }
+                // viewToJid
+                viewToJid[v.hashCode()]?.let { return it }
+                v = v.parent as? View
+                depth++
+            }
+        }
+
+        // 2. Activity intent
         var c: Context? = context
-        var activity: android.app.Activity? = null
         while (c != null) {
-            if (c is android.app.Activity) { activity = c; break }
+            if (c is android.app.Activity) {
+                if (!c.javaClass.name.endsWith("HomeActivity")) {
+                    try {
+                        val extras = c.intent?.extras
+                        if (extras != null) {
+                            for (k in extras.keySet()) {
+                                @Suppress("DEPRECATION") val v = extras.get(k)
+                                if (v is String) {
+                                    extractGroupJid(v)?.let { return it }
+                                }
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+                break
+            }
             c = (c as? android.content.ContextWrapper)?.baseContext
         }
-        if (activity != null && !activity.javaClass.name.endsWith("HomeActivity")) {
-            try {
-                val extras = activity.intent?.extras
-                if (extras != null) {
-                    for (k in extras.keySet()) {
-                        @Suppress("DEPRECATION") val v = extras.get(k)
-                        if (v is String && GROUP_EXACT_REGEX.matches(v)) {
-                            return v
-                        }
-                    }
-                }
-            } catch (_: Throwable) {}
-        }
+
+        // 3. fallback
         return lastChatRowJid
     }
 
@@ -359,12 +387,14 @@ class MuteHook : IXposedHookLoadPackage {
                     if (cleanJid in mutedGroupsInProcess) {
                         installMenuGuard(listView, popup)
 
-                        // סנכרון בכל פתיחת תפריט: מצב WhatsApp נקרא טרי. אם הוא לא מושתק למרות שההשתקה
-                        // המוחלטת פעילה (למשל בוטל במקום אחר) — מפעילים מחדש את ההשתקה המקורית.
+                        // סנכרון פסיבי: אם WhatsApp לא מושתק למרות שההשתקה המוחלטת פעילה,
+                        // מנסים להשתיק מחדש (עד 2 ניסיונות, ורק אם אין פעולה בתהליך).
+                        // גלילה / פתיחת תפריט לא מפעילה את זה — רק אם nativeMuteState מחזיר false בוודאות.
                         val tries = healAttempts[cleanJid] ?: 0
-                        if (!opInProgress && tries < 2 && nativeMuteState(activityOf(context)) == false) {
+                        val knownNotMuted = nativeMuteState(activityOf(context)) == false
+                        if (!opInProgress && tries < 2 && knownNotMuted) {
                             val nat = findNativeMute(listView)
-                            if (nat != null) {
+                            if (nat != null && nat.second == 1) { // סוג 1 = "Mute" = לא מושתק
                                 healAttempts[cleanJid] = tries + 1
                                 startNativeMute(context, cleanJid, listView, nat.first, true)
                                 popup.dismiss()
@@ -526,44 +556,60 @@ class MuteHook : IXposedHookLoadPackage {
 
     private fun injectMuteItem(listView: ListView, context: Context, jid: String, popup: PopupWindow) {
         try {
-            // קח ישירות את ה-parent של ה-ListView — זה ה-container
-            val container = listView.parent as? ViewGroup ?: run {
-                return
-            }
+            val container = listView.parent as? ViewGroup ?: return
 
-            // מניעת כפילות
+            // בדוק כפילות — אבל אם הפריט קיים ומצבו לא עדכני, עדכן אותו במקום להחזיר
+            val actuallyMuted = jid in mutedGroupsInProcess
             for (i in 0 until container.childCount) {
-                if (container.getChildAt(i)?.tag == "wa_mute_item") {
+                val child = container.getChildAt(i)
+                if (child?.tag == "wa_mute_item") {
+                    // עדכן טקסט וצבע אם המצב השתנה
+                    if (child is TextView) {
+                        val expected = if (actuallyMuted) "בטל השתקה לגמרי" else "השתק לגמרי"
+                        if (child.text?.toString() != expected) {
+                            child.text = expected
+                            child.setTextColor(if (actuallyMuted) COLOR_RED else Color.parseColor("#212121"))
+                            child.setOnClickListener { onToggleClicked(context, jid, popup) }
+                        }
+                    }
                     return
                 }
             }
 
-            val isMuted = jid in mutedGroupsInProcess
-            val tv = buildMuteTextView(context, jid, isMuted, popup)
+            val tv = buildMuteTextView(context, jid, actuallyMuted, popup)
 
             val lvIndex = (0 until container.childCount).firstOrNull {
                 container.getChildAt(it) === listView
             } ?: (container.childCount - 1)
 
             container.addView(tv, lvIndex + 1)
-        } catch (e: Exception) {
-        }
+        } catch (_: Exception) {}
     }
 
     private fun injectMuteItemToParent(view: View, context: Context, jid: String, popup: PopupWindow) {
         val parent = view.parent as? ViewGroup ?: return
+        val actuallyMuted = jid in mutedGroupsInProcess
         for (i in 0 until parent.childCount) {
-            if (parent.getChildAt(i)?.tag == "wa_mute_item") return
+            val child = parent.getChildAt(i)
+            if (child?.tag == "wa_mute_item") {
+                if (child is TextView) {
+                    val expected = if (actuallyMuted) "בטל השתקה לגמרי" else "השתק לגמרי"
+                    if (child.text?.toString() != expected) {
+                        child.text = expected
+                        child.setTextColor(if (actuallyMuted) COLOR_RED else Color.parseColor("#212121"))
+                        child.setOnClickListener { onToggleClicked(context, jid, popup) }
+                    }
+                }
+                return
+            }
         }
-        val isMuted = jid in mutedGroupsInProcess
-        val tv = buildMuteTextView(context, jid, isMuted, popup)
+        val tv = buildMuteTextView(context, jid, actuallyMuted, popup)
         val idx = (0 until parent.childCount).firstOrNull { parent.getChildAt(it) === view }
             ?: parent.childCount - 1
         parent.addView(tv, idx + 1)
     }
 
     private fun buildMuteTextView(context: Context, jid: String, @Suppress("UNUSED_PARAMETER") isMuted: Boolean, popup: PopupWindow): TextView {
-        // עבוד תמיד עם JID נקי
         val cleanJid = extractGroupJid(jid) ?: jid
         val actuallyMuted = cleanJid in mutedGroupsInProcess
         return TextView(context).apply {
@@ -589,6 +635,7 @@ class MuteHook : IXposedHookLoadPackage {
                     compoundDrawablePadding = 24
                 }
             } catch (_: Exception) {}
+            // cleanJid נשמר ב-closure — לא תלוי ב-lastChatRowJid
             setOnClickListener { onToggleClicked(context, cleanJid, popup) }
         }
     }
@@ -809,8 +856,7 @@ class MuteHook : IXposedHookLoadPackage {
         opInProgress = false
         if (pendingMute === p) pendingMute = null
         when {
-            success && p.heal -> refreshBells() // המצב שלנו כבר שמור; רק הסתנכרן מול WhatsApp
-            success -> commitState(p.ctx, p.jid, true)
+            success -> commitState(p.ctx, p.jid, true) // heal או רגיל — תמיד שומר ומעדכן UI
             p.heal -> toast(p.ctx, "סנכרון ההשתקה של WhatsApp נכשל")
             else -> failToggle(p.ctx, true, reason)
         }

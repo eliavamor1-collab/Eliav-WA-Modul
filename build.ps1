@@ -49,6 +49,8 @@ $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 $ver = [regex]::Match((Get-Content (Join-Path $root 'app\build.gradle.kts') -Raw), 'versionName\s*=\s*"([^"]+)"').Groups[1].Value
 $out = Join-Path $dist "Eliav-WA-Modul-v$ver.apk"
+# remove older versions to avoid confusion
+Get-ChildItem $dist -Filter "Eliav-WA-Modul-v*.apk" | Where-Object { $_.Name -ne (Split-Path $out -Leaf) } | Remove-Item -Force
 Copy-Item $apk $out -Force
 Write-Host ''
 Write-Host "BUILD OK  stamp=$stamp"
