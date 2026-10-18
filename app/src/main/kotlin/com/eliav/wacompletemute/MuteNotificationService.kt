@@ -59,8 +59,14 @@ class MuteNotificationService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName != WHATSAPP_PACKAGE) return
 
-        val jid = extractGroupJid(sbn.notification) ?: return
+        val jid = extractGroupJid(sbn.notification)
+        if (jid == null) {
+            // Debug: log notification that we couldn't parse
+            android.util.Log.w("WaCompleteMute", "NotifSvc: no JID extracted from notif id=${sbn.id} tag=${sbn.tag}")
+            return
+        }
         if (jid in mutedGroups) {
+            android.util.Log.d("WaCompleteMute", "NotifSvc: canceling $jid")
             cancelNotification(sbn.key)
         }
     }
@@ -94,6 +100,7 @@ class MuteNotificationService : NotificationListenerService() {
     private fun extractGroupJid(n: Notification): String? {
         val extras: Bundle = n.extras ?: return null
 
+        // 1. Scan all extras values
         for (key in extras.keySet()) {
             val v: Any? = @Suppress("DEPRECATION") extras.get(key)
             if (v is String) {
@@ -109,6 +116,23 @@ class MuteNotificationService : NotificationListenerService() {
                 }
             }
         }
+
+        // 2. Fallback: check notification tag (some WA versions put JID there)
+        try {
+            val tag = n.javaClass.getDeclaredField("mChannelId").apply { isAccessible = true }.get(n) as? String
+            if (tag != null && tag.contains("@g.us")) GROUP_JID_REGEX.find(tag)?.let { return it.value }
+        } catch (_: Throwable) {}
+
+        // 3. Last resort: reflection scan of all Notification fields
+        try {
+            for (field in n.javaClass.declaredFields) {
+                field.isAccessible = true
+                val v = field.get(n) ?: continue
+                val s = v.toString()
+                if (s.contains("@g.us")) GROUP_JID_REGEX.find(s)?.let { return it.value }
+            }
+        } catch (_: Throwable) {}
+
         return null
     }
 }
