@@ -18,8 +18,8 @@ android {
         applicationId = "com.eliav.wacompletemute"
         minSdk = 26          // Android 8.0 — NotificationChannel API
         targetSdk = 34
-        versionCode = 34
-        versionName = "3.7.1"
+        versionCode = 35
+        versionName = "3.8"
 
         buildConfigField("String", "BUILD_STAMP", "\"$buildStamp\"")
     }

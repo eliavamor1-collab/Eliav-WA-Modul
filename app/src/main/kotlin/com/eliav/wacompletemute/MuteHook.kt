@@ -868,27 +868,19 @@ class MuteHook : IXposedHookLoadPackage {
                     val n = param.args.lastOrNull() as? Notification ?: return
                     val extras = n.extras ?: return
                     
-                    val isGroupChat = extras.getBoolean("android.isGroupConversation", false)
-                    if (!isGroupChat) return
-                    
                     ensureMutedLoaded(null)
                     if (mutedGroupsInProcess.isEmpty()) return
                     
-                    // Try to get JID from database using last_row_id
-                    // Note: Assumption that last_row_id = message._id is unverified
+                    // Get last_row_id for both messages and calls
                     val lastRowId = extras.getLong("last_row_id", -1L)
-                    if (lastRowId > 0) {
-                        val ctx = currentApp()
-                        if (ctx != null) {
-                            val jid = getJidFromRowId(ctx, lastRowId)
-                            if (jid != null && jid in mutedGroupsInProcess) {
-                                param.result = null
-                            }
-                        }
-                    }
+                    if (lastRowId <= 0) return
                     
-                    // No fallback: if SQLite query fails, allow notification
-                    // Better to miss blocking than to block wrong group
+                    val ctx = currentApp() ?: return
+                    val jid = getJidFromRowId(ctx, lastRowId)
+                    
+                    if (jid != null && jid in mutedGroupsInProcess) {
+                        param.result = null
+                    }
                 } catch (_: Throwable) {}
             }
         }
