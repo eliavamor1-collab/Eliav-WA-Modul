@@ -866,109 +866,76 @@ class MuteHook : IXposedHookLoadPackage {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
                     val n = param.args.lastOrNull() as? Notification ?: return
+                    val extras = n.extras ?: return
                     
-                    // Log hook invocation
-                    val id = param.args.getOrNull(if (param.args.size == 3) 1 else 0) as? Int
-                    val tag = if (param.args.size == 3) param.args[0] as? String else null
-                    log("Hook: notify() called id=$id tag=$tag")
+                    val isGroupChat = extras.getBoolean("android.isGroupConversation", false)
+                    if (!isGroupChat) return  // Skip non-group notifications
                     
-                    // Log all extras keys (no values for privacy)
-                    val extras = n.extras
-                    if (extras != null) {
-                        val keys = extras.keySet().joinToString(", ")
-                        log("Hook: extras keys: $keys")
-                        
-                        // Try to extract JID from extras
+                    ensureMutedLoaded(null)
+                    if (mutedGroupsInProcess.isEmpty()) return  // No muted groups
+                    
+                    // Try to extract JID from notification content
+                    var jid: String? = null
+                    
+                    // Check all extras values
+                    run extraction@ {
                         for (key in extras.keySet()) {
-                            @Suppress("DEPRECATION") val v = extras.get(key)
+                            val v = extras.get(key)
+                            
+                            // Check strings
                             if (v is String && v.contains("@g.us")) {
-                                log("Hook: found @g.us in key '$key'")
+                                extractJid(v)?.let { jid = it; return@extraction }
                             }
-                            if (v is Array<*>) {
-                                v.filterIsInstance<CharSequence>().forEachIndexed { idx, cs ->
-                                    val s = cs.toString()
-                                    if (s.contains("@g.us")) {
-                                        log("Hook: found @g.us in array key '$key'[$idx]")
+                            
+                            // Check MessagingStyle messages
+                            if (v is Array<*> && key == "android.messages") {
+                                for (msg in v) {
+                                    if (msg is android.os.Bundle) {
+                                        val sender = msg.getCharSequence("sender_person")?.toString()
+                                        if (sender?.contains("@g.us") == true) {
+                                            // Extract group JID from sender (format: "Name\n<user_jid>\n<group_jid>")
+                                            val parts = sender.split("\n")
+                                            if (parts.size >= 3) {
+                                                extractJid(parts[2])?.let { jid = it; return@extraction }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Check Person list
+                            if (v is java.util.ArrayList<*> && key == "android.people.list") {
+                                for (person in v) {
+                                    val uri = try {
+                                        person?.javaClass?.getMethod("getUri")?.invoke(person) as? android.net.Uri
+                                    } catch (_: Throwable) { null }
+                                    uri?.toString()?.let { uriStr ->
+                                        if (uriStr.contains("@g.us")) {
+                                            extractJid(uriStr)?.let { jid = it; return@extraction }
+                                        }
                                     }
                                 }
                             }
                         }
-                    } else {
-                        log("Hook: extras is null")
                     }
                     
-                    // Log channelId
-                    try {
-                        val channelId = n.channelId
-                        log("Hook: channelId=$channelId")
-                    } catch (e: Throwable) {
-                        log("Hook: channelId error: ${e.message}")
-                    }
+                    if (jid == null) return
                     
-                    ensureMutedLoaded(null)
-                    log("Hook: mutedGroups count=${mutedGroupsInProcess.size}")
-                    
-                    val jid = extractJidFromNotification(n)
-                    if (jid == null) {
-                        log("Hook: no JID extracted, allowing notification")
-                        return
-                    }
-                    
-                    log("Hook: extracted JID=$jid")
                     if (jid in mutedGroupsInProcess) {
-                        log("Hook: BLOCKING notification for $jid")
-                        param.result = null
-                    } else {
-                        log("Hook: JID not muted, allowing notification")
+                        param.result = null  // Block notification
                     }
-                } catch (e: Throwable) {
-                    log("Hook: exception ${e.message}")
-                }
+                } catch (_: Throwable) {}
             }
         }
         
-        try {
-            XposedHelpers.findAndHookMethod(NotificationManager::class.java,
-                "notify", String::class.java, Int::class.java, Notification::class.java, hook)
-            log("Hook: installed notify(String, int, Notification)")
-        } catch (e: Throwable) {
-            log("Hook: failed to install notify(String, int, Notification): ${e.message}")
-        }
-        
-        try {
-            XposedHelpers.findAndHookMethod(NotificationManager::class.java,
-                "notify", Int::class.java, Notification::class.java, hook)
-            log("Hook: installed notify(int, Notification)")
-        } catch (e: Throwable) {
-            log("Hook: failed to install notify(int, Notification): ${e.message}")
-        }
+        XposedHelpers.findAndHookMethod(NotificationManager::class.java,
+            "notify", String::class.java, Int::class.java, Notification::class.java, hook)
+        XposedHelpers.findAndHookMethod(NotificationManager::class.java,
+            "notify", Int::class.java, Notification::class.java, hook)
     }
 
     private fun extractJidFromNotification(n: Notification): String? {
-        val extras = n.extras ?: return null
-        
-        // 1. Scan extras keys and values (most reliable)
-        for (key in extras.keySet()) {
-            @Suppress("DEPRECATION") val v = extras.get(key)
-            if (v is String) {
-                extractJid(v)?.let { return it }
-            }
-            // Check arrays (MessagingStyle)
-            if (v is Array<*>) {
-                v.filterIsInstance<CharSequence>().forEach { cs ->
-                    extractJid(cs.toString())?.let { return it }
-                }
-            }
-        }
-        
-        // 2. Fallback: channelId (some WA versions store JID there)
-        try {
-            val channelId = n.channelId
-            if (channelId?.contains("@g.us") == true) {
-                extractJid(channelId)?.let { return it }
-            }
-        } catch (_: Throwable) {}
-        
+        // Removed - JID extraction moved to hookNotificationManager
         return null
     }
 
