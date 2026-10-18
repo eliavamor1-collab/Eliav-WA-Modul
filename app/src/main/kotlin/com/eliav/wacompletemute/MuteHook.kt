@@ -845,18 +845,84 @@ class MuteHook : IXposedHookLoadPackage {
     private fun hookNotificationManager(@Suppress("UNUSED_PARAMETER") cl: ClassLoader) {
         val hook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
-                val n   = param.args.lastOrNull() as? Notification ?: return
-                ensureMutedLoaded(null)
-                val jid = extractJidFromNotification(n) ?: return
-                if (jid !in mutedGroupsInProcess) return
-                log("Hook: blocking notification for $jid")
-                param.result = null
+                try {
+                    val n = param.args.lastOrNull() as? Notification ?: return
+                    
+                    // Log hook invocation
+                    val id = param.args.getOrNull(if (param.args.size == 3) 1 else 0) as? Int
+                    val tag = if (param.args.size == 3) param.args[0] as? String else null
+                    log("Hook: notify() called id=$id tag=$tag")
+                    
+                    // Log all extras keys (no values for privacy)
+                    val extras = n.extras
+                    if (extras != null) {
+                        val keys = extras.keySet().joinToString(", ")
+                        log("Hook: extras keys: $keys")
+                        
+                        // Try to extract JID from extras
+                        for (key in extras.keySet()) {
+                            @Suppress("DEPRECATION") val v = extras.get(key)
+                            if (v is String && v.contains("@g.us")) {
+                                log("Hook: found @g.us in key '$key'")
+                            }
+                            if (v is Array<*>) {
+                                v.filterIsInstance<CharSequence>().forEachIndexed { idx, cs ->
+                                    val s = cs.toString()
+                                    if (s.contains("@g.us")) {
+                                        log("Hook: found @g.us in array key '$key'[$idx]")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        log("Hook: extras is null")
+                    }
+                    
+                    // Log channelId
+                    try {
+                        val channelId = n.channelId
+                        log("Hook: channelId=$channelId")
+                    } catch (e: Throwable) {
+                        log("Hook: channelId error: ${e.message}")
+                    }
+                    
+                    ensureMutedLoaded(null)
+                    log("Hook: mutedGroups count=${mutedGroupsInProcess.size}")
+                    
+                    val jid = extractJidFromNotification(n)
+                    if (jid == null) {
+                        log("Hook: no JID extracted, allowing notification")
+                        return
+                    }
+                    
+                    log("Hook: extracted JID=$jid")
+                    if (jid in mutedGroupsInProcess) {
+                        log("Hook: BLOCKING notification for $jid")
+                        param.result = null
+                    } else {
+                        log("Hook: JID not muted, allowing notification")
+                    }
+                } catch (e: Throwable) {
+                    log("Hook: exception ${e.message}")
+                }
             }
         }
-        XposedHelpers.findAndHookMethod(NotificationManager::class.java,
-            "notify", String::class.java, Int::class.java, Notification::class.java, hook)
-        XposedHelpers.findAndHookMethod(NotificationManager::class.java,
-            "notify", Int::class.java, Notification::class.java, hook)
+        
+        try {
+            XposedHelpers.findAndHookMethod(NotificationManager::class.java,
+                "notify", String::class.java, Int::class.java, Notification::class.java, hook)
+            log("Hook: installed notify(String, int, Notification)")
+        } catch (e: Throwable) {
+            log("Hook: failed to install notify(String, int, Notification): ${e.message}")
+        }
+        
+        try {
+            XposedHelpers.findAndHookMethod(NotificationManager::class.java,
+                "notify", Int::class.java, Notification::class.java, hook)
+            log("Hook: installed notify(int, Notification)")
+        } catch (e: Throwable) {
+            log("Hook: failed to install notify(int, Notification): ${e.message}")
+        }
     }
 
     private fun extractJidFromNotification(n: Notification): String? {
