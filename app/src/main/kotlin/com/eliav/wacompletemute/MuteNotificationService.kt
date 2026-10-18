@@ -117,19 +117,11 @@ class MuteNotificationService : NotificationListenerService() {
             }
         }
 
-        // 2. Fallback: check notification tag (some WA versions put JID there)
+        // 2. Fallback: check notification channelId (safe - WA sometimes puts JID there)
         try {
-            val tag = n.javaClass.getDeclaredField("mChannelId").apply { isAccessible = true }.get(n) as? String
-            if (tag != null && tag.contains("@g.us")) GROUP_JID_REGEX.find(tag)?.let { return it.value }
-        } catch (_: Throwable) {}
-
-        // 3. Last resort: reflection scan of all Notification fields
-        try {
-            for (field in n.javaClass.declaredFields) {
-                field.isAccessible = true
-                val v = field.get(n) ?: continue
-                val s = v.toString()
-                if (s.contains("@g.us")) GROUP_JID_REGEX.find(s)?.let { return it.value }
+            val channelId = n.channelId
+            if (channelId?.contains("@g.us") == true) {
+                GROUP_JID_REGEX.find(channelId)?.let { return it.value }
             }
         } catch (_: Throwable) {}
 

@@ -849,6 +849,7 @@ class MuteHook : IXposedHookLoadPackage {
                 ensureMutedLoaded(null)
                 val jid = extractJidFromNotification(n) ?: return
                 if (jid !in mutedGroupsInProcess) return
+                log("Hook: blocking notification for $jid")
                 param.result = null
             }
         }
@@ -860,10 +861,29 @@ class MuteHook : IXposedHookLoadPackage {
 
     private fun extractJidFromNotification(n: Notification): String? {
         val extras = n.extras ?: return null
+        
+        // 1. Scan extras keys and values (most reliable)
         for (key in extras.keySet()) {
             @Suppress("DEPRECATION") val v = extras.get(key)
-            if (v is String) extractJid(v)?.let { return it }
+            if (v is String) {
+                extractJid(v)?.let { return it }
+            }
+            // Check arrays (MessagingStyle)
+            if (v is Array<*>) {
+                v.filterIsInstance<CharSequence>().forEach { cs ->
+                    extractJid(cs.toString())?.let { return it }
+                }
+            }
         }
+        
+        // 2. Fallback: channelId (some WA versions store JID there)
+        try {
+            val channelId = n.channelId
+            if (channelId?.contains("@g.us") == true) {
+                extractJid(channelId)?.let { return it }
+            }
+        } catch (_: Throwable) {}
+        
         return null
     }
 
