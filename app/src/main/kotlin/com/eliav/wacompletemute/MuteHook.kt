@@ -875,6 +875,7 @@ class MuteHook : IXposedHookLoadPackage {
                     if (mutedGroupsInProcess.isEmpty()) return
                     
                     // Try to get JID from database using last_row_id
+                    // Note: Assumption that last_row_id = message._id is unverified
                     val lastRowId = extras.getLong("last_row_id", -1L)
                     if (lastRowId > 0) {
                         val ctx = currentApp()
@@ -882,25 +883,12 @@ class MuteHook : IXposedHookLoadPackage {
                             val jid = getJidFromRowId(ctx, lastRowId)
                             if (jid != null && jid in mutedGroupsInProcess) {
                                 param.result = null
-                                return
                             }
                         }
                     }
                     
-                    // Fallback: scan extras for JID
-                    var jid: String? = null
-                    run extraction@ {
-                        for (key in extras.keySet()) {
-                            val v = extras.get(key)
-                            if (v is String && v.contains("@g.us")) {
-                                extractJid(v)?.let { jid = it; return@extraction }
-                            }
-                        }
-                    }
-                    
-                    if (jid != null && jid in mutedGroupsInProcess) {
-                        param.result = null
-                    }
+                    // No fallback: if SQLite query fails, allow notification
+                    // Better to miss blocking than to block wrong group
                 } catch (_: Throwable) {}
             }
         }
