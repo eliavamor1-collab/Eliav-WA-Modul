@@ -33,10 +33,12 @@
             </intent-filter>
         </service>
 
-        <!-- Receiver שמקבל עדכוני השתקה מה-Hook דרך IPC (מוגבל ע"י setPackage בשולח) -->
+        <!-- Receiver שמקבל עדכוני השתקה מה-Hook דרך IPC.
+             exported=false: רק תהליכים עם אותו UID יכולים לשלוח ישירות.
+             ה-Hook שולח עם setPackage("com.eliav.wacompletemute") כשכבת הגנה נוספת. -->
         <receiver
             android:name=".MuteStateReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="com.eliav.wacompletemute.ACTION_MUTE_UPDATE" />
             </intent-filter>

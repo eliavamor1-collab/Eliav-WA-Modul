@@ -27,7 +27,7 @@ class MuteNotificationService : NotificationListenerService() {
 
     companion object {
         private const val WHATSAPP_PACKAGE = "com.whatsapp"
-        private val GROUP_JID_REGEX        = Regex("""\d+-\d+@g\.us""")
+        private val GROUP_JID_REGEX = Regex("""[\d\-]+@g\.us""")
 
         /** singleton reference לצורך עדכון in-memory מ-MuteStateReceiver */
         var instance: MuteNotificationService? = null
@@ -97,15 +97,15 @@ class MuteNotificationService : NotificationListenerService() {
         for (key in extras.keySet()) {
             val v: Any? = @Suppress("DEPRECATION") extras.get(key)
             if (v is String) {
-                if (v.contains("@g.us")) return v
-                GROUP_JID_REGEX.find(v)?.let { return it.value }
+                if (v.contains("@g.us")) {
+                    GROUP_JID_REGEX.find(v)?.let { return it.value }
+                }
             }
             // MessagingStyle: CharSequence array של הודעות
             if (v is Array<*>) {
                 v.filterIsInstance<CharSequence>().forEach { cs ->
                     val s = cs.toString()
-                    if (s.contains("@g.us")) return s
-                    GROUP_JID_REGEX.find(s)?.let { return it.value }
+                    if (s.contains("@g.us")) GROUP_JID_REGEX.find(s)?.let { return it.value }
                 }
             }
         }
