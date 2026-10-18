@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Eliav WA Modul</string>
+    <string name="service_label">שירות השתקת WhatsApp</string>
+
+    <string name="status_title">סטטוס המודול</string>
+    <string name="module_active">המודול פעיל ב-LSPosed ✓</string>
+    <string name="module_inactive">המודול לא פעיל — פתח LSPosed והפעל</string>
+    <string name="notification_access_granted">גישה להתראות מאושרת ✓</string>
+    <string name="notification_access_missing">נדרשת גישה להתראות — לחץ כאן</string>
+
+    <string name="menu_mute">השתק לגמרי</string>
+    <string name="menu_unmute">בטל השתקה לגמרי</string>
+
+    <string name="toast_muted">הקבוצה הושתקה לגמרי</string>
+    <string name="toast_unmuted">ההשתקה המלאה בוטלה</string>
+
+    <string name="section_how_title">איך זה עובד</string>
+    <string name="section_how_body">לחץ לחיצה ארוכה על קבוצה ברשימת הצ\'אטים ← לחץ על שלוש הנקודות (⋮) ← בחר \"השתק לגמרי\".
+
+שכבה 1 — Hook על NotificationManager.notify() בתוך תהליך WhatsApp: מונע את הגשת ההתראה לOS לפני שהצליל והרטט מופעלים.
+
+שכבה 2 — NotificationListenerService: חוסם כל התראה שבכל זאת עוברת (גיבוי).</string>
+
+    <string name="section_limits_title">מגבלות ידועות</string>
+    <string name="section_limits_body">• שכבה 1 (Hook פנימי) תעבוד רק אם com.whatsapp.HomeActivity משתמש ב-NotificationManager. אם WhatsApp משתמש במנגנון הודעה שונה (FCM ישיר), הצליל עשוי לעבור.
+• שכבה 2 (NotificationListenerService) מובטחת לחסום את ההתראה לאחר שה-OS קיבל אותה, אבל הצליל עלול כבר להישמע בשבריר שנייה לפני הביטול.
+• ההשתקה מבוססת על JID של הקבוצה (@g.us) — אם WhatsApp לא מוסר את ה-JID ב-Intent, נדרש fallback עם reflection.
+• נבדק רק מול WhatsApp v2.24.x — גרסאות עתידיות עשויות לשנות שמות מחלקות.</string>
+</resources>

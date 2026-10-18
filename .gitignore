@@ -1,0 +1,12 @@
+﻿.gradle/
+app/build/
+build/
+dist/
+*.apk
+local.properties
+.idea/
+*.iml
+.agents/
+*.ps1~
+
+wa_dex/

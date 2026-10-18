@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        אין הרשאות אחסון ואין קבצי לוג. ה-Broadcast מה-Hook נשלח עם intent.setPackage(MODULE_PACKAGE),
+        ולכן אינו דורש הרשאה. NotificationListenerService מוגן ע"י android:permission על ה-service עצמו.
+    -->
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
+
+        <!-- מסך סטטוס בלבד -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Service שחוסם התראות ברמת ה-OS -->
+        <service
+            android:name=".MuteNotificationService"
+            android:label="@string/service_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Receiver שמקבל עדכוני השתקה מה-Hook דרך IPC (מוגבל ע"י setPackage בשולח) -->
+        <receiver
+            android:name=".MuteStateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.eliav.wacompletemute.ACTION_MUTE_UPDATE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- מטא-דאטה של LSPosed -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="השתקה מלאה של קבוצות WhatsApp — חוסם צליל, רטט והתראות" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+
+    </application>
+
+</manifest>
