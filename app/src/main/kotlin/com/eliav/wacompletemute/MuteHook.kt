@@ -83,7 +83,7 @@ class MuteHook : IXposedHookLoadPackage {
         private val GROUP_MENU_KW = setOf(
             "מחק", "delete", "ארכיון", "archive",
             "נעץ", "pin", "הודעות נעלמות", "disappearing",
-            "השתק התראות", "mute notifications",
+            "השתק התראות", "השתקת התראות", "mute notifications",
             "בטל השתקת התראות", "unmute notifications"
         )
     }
@@ -98,12 +98,7 @@ class MuteHook : IXposedHookLoadPackage {
     /** Maps view.hashCode() → normalised JID for the chat row that owns the view. */
     private val viewToJid = mutableMapOf<Int, String>()
 
-    /**
-     * Last JID seen from a chat-row setTag.  Updated on every row bind (including during
-     * scroll).  Used ONLY as a last-resort fallback for popup JID resolution — never as
-     * the authoritative JID for a state change.
-     */
-    @Volatile private var lastChatRowJid: String? = null
+    /** Last JID seen from a chat-row setTag — removed, no longer used. */
 
     /** Known chat-row ViewGroups → their normalised JID (for bell refresh). */
     private val boundRows = WeakHashMap<View, String>()
@@ -212,12 +207,14 @@ class MuteHook : IXposedHookLoadPackage {
                         if (tag.contains("Key") || tag.contains("isFromMe") || tag.contains("id=")) return
                         val jid = extractJid(tag) ?: return
                         viewToJid[view.hashCode()] = jid
-                        lastChatRowJid = jid
                         scheduleBellUpdate(view, jid)
                     } else {
-                        // Non-group row recycled to a different chat — remove bell
-                        val other = ANY_JID.find(tag)?.value ?: return
-                        scheduleBellUpdate(view, other)
+                        // Clear stale group identity when a View is reused for another chat.
+                        viewToJid.remove(view.hashCode())
+                        val other = ANY_JID.find(tag)?.value
+                        if (other != null) {
+                            scheduleBellUpdate(view, other)
+                        }
                     }
                 }
             })
@@ -371,8 +368,8 @@ class MuteHook : IXposedHookLoadPackage {
             }
             c = (c as? android.content.ContextWrapper)?.baseContext
         }
-        // 3. Fallback — stale but better than nothing for the chat list
-        return lastChatRowJid
+        // No reliable chat identity: fail safely instead of targeting another group.
+        return null
     }
 
     private fun handlePopup(popup: PopupWindow, cv: View, jid: String) {
@@ -631,8 +628,11 @@ class MuteHook : IXposedHookLoadPackage {
                 opInProgress = true
                 verifyNative(activityOf(ctx), false, System.currentTimeMillis()) { ok ->
                     opInProgress = false
-                    if (ok != false) commitState(ctx, jid, false)
-                    else failToggle(ctx, false)
+                    if (ok == true) {
+                        commitState(ctx, jid, false)
+                    } else {
+                        failToggle(ctx, false)
+                    }
                 }
                 popup.dismiss()
             }
